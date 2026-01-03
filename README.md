@@ -2,12 +2,40 @@
 
 A Chrome extension that enables testing the Gemini Computer Use model directly in your browser. This extension allows an AI agent to interact with web pages by taking screenshots, analyzing them, and executing actions like clicking, typing, and scrolling.
 
+This implementation uses the official `@google/generative-ai` JavaScript SDK to closely mirror the Python [google-gemini/computer-use-preview](https://github.com/google-gemini/computer-use-preview) agent.
+
+## Building the Extension
+
+### Prerequisites
+
+- Node.js 18+ installed
+- npm
+
+### Build Steps
+
+```bash
+# Install dependencies
+npm install
+
+# Build the extension
+npm run build
+```
+
+This creates a `dist/` folder containing the ready-to-load extension.
+
+### Development Mode
+
+```bash
+# Watch for changes and rebuild automatically
+npm run watch
+```
+
 ## Installation
 
-1. Download or clone this repository
+1. Build the extension (see above)
 2. Open Chrome and navigate to `chrome://extensions/`
 3. Enable "Developer mode" using the toggle in the top right corner
-4. Click "Load unpacked" and select the `gemini-computer-use-extension` folder
+4. Click "Load unpacked" and select the `dist` folder (not the root folder!)
 5. The extension icon will appear in your Chrome toolbar
 
 ## Getting a Gemini API Key
@@ -69,7 +97,7 @@ For potentially sensitive actions (like form submissions or purchases), the mode
 
 | Setting | Description |
 |---------|-------------|
-| Model Name | The Gemini model to use (default: `gemini-2.0-flash-exp`) |
+| Model Name | The Gemini model to use (default: `gemini-2.5-computer-use-preview-10-2025`) |
 | Use Vertex AI | Toggle between Gemini Developer API and Vertex AI |
 | API Key | Your Gemini API key (when not using Vertex AI) |
 | Project ID | Your GCP project ID (when using Vertex AI) |

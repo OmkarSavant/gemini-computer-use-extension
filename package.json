@@ -1,0 +1,16 @@
+{
+  "name": "gemini-computer-use-extension",
+  "version": "1.0.0",
+  "description": "Chrome extension for testing Gemini Computer Use model",
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "watch": "node build.js --watch"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

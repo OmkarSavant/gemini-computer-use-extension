@@ -1,88 +1,18 @@
 /**
  * Background service worker for Gemini Computer Use extension
  *
- * This service worker manages the agent loop, coordinates with the
- * content script for action execution, and communicates with the side panel.
+ * This service worker manages the agent loop using the BrowserAgent class,
+ * mirroring the Python google-gemini/computer-use-preview implementation.
  */
 
-import {
-  callGeminiAPI,
-  extractFunctionCalls,
-  extractText,
-  isWaitingForInput,
-  requiresSafetyConfirmation,
-  buildFunctionResponse,
-  buildUserMessage,
-  sleep
-} from '../lib/api.js';
-
-import { formatFunctionCall } from '../lib/actions.js';
-
-// Constants matching original implementation
-const PREDEFINED_COMPUTER_USE_FUNCTIONS = [
-  "open_web_browser",
-  "click_at",
-  "hover_at",
-  "type_text_at",
-  "scroll_document",
-  "scroll_at",
-  "wait_5_seconds",
-  "go_back",
-  "go_forward",
-  "search",
-  "navigate",
-  "key_combination",
-  "drag_and_drop",
-];
-
-const MAX_RECENT_TURN_WITH_SCREENSHOTS = 3;
+import { BrowserAgent, formatFunctionCall, sleep } from '../lib/gemini-client.js';
 
 // State management
-let conversationHistory = [];
+let agent = null;
 let isRunning = false;
 let shouldStop = false;
 let currentSettings = null;
 let pendingSafetyConfirmation = null;
-
-/**
- * Remove screenshots from old turns to manage context size
- * Keep only the most recent MAX_RECENT_TURN_WITH_SCREENSHOTS turns with screenshots
- */
-function cleanupOldScreenshots() {
-  let turnWithScreenshotsFound = 0;
-
-  // Iterate backwards through conversation history
-  for (let i = conversationHistory.length - 1; i >= 0; i--) {
-    const content = conversationHistory[i];
-
-    if (content.role === 'user' && content.parts) {
-      // Check if content has screenshot from predefined computer use functions
-      let hasScreenshot = false;
-
-      for (const part of content.parts) {
-        const fr = part.functionResponse;
-        if (fr && fr.parts && PREDEFINED_COMPUTER_USE_FUNCTIONS.includes(fr.name)) {
-          hasScreenshot = true;
-          break;
-        }
-      }
-
-      if (hasScreenshot) {
-        turnWithScreenshotsFound++;
-
-        // Remove screenshot if exceeding limit
-        if (turnWithScreenshotsFound > MAX_RECENT_TURN_WITH_SCREENSHOTS) {
-          for (const part of content.parts) {
-            const fr = part.functionResponse;
-            if (fr && fr.parts && PREDEFINED_COMPUTER_USE_FUNCTIONS.includes(fr.name)) {
-              fr.parts = null;
-            }
-          }
-        }
-      }
-    }
-  }
-}
 
 // Open side panel when extension icon is clicked
 chrome.action.onClicked.addListener((tab) => {
@@ -114,6 +44,14 @@ async function captureScreenshot() {
     console.error('Screenshot capture failed:', error);
     throw error;
   }
+}
+
+/**
+ * Get current tab URL
+ */
+async function getCurrentUrl() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.url || '';
 }
 
 /**
@@ -182,13 +120,11 @@ function sendToSidepanel(message) {
  * Wait for page to settle after navigation/action
  */
 async function waitForPageSettle() {
-  // Wait a bit for any navigation or dynamic content to load
   await sleep(500);
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.status === 'loading') {
-      // Wait for tab to finish loading
       await new Promise((resolve) => {
         const listener = (tabId, changeInfo) => {
           if (tabId === tab.id && changeInfo.status === 'complete') {
@@ -205,7 +141,6 @@ async function waitForPageSettle() {
         }, 10000);
       });
 
-      // Additional delay after page load
       await sleep(500);
     }
   } catch (error) {
@@ -229,7 +164,128 @@ async function requestSafetyConfirmation(functionCall, explanation) {
 }
 
 /**
+ * Run one iteration of the agent loop
+ * Mirrors the Python run_one_iteration method
+ */
+async function runOneIteration() {
+  // Get model response
+  let response;
+  try {
+    response = await agent.getModelResponse();
+  } catch (error) {
+    console.error('Error getting model response:', error);
+    sendToSidepanel({
+      type: 'ERROR',
+      message: error.message
+    });
+    return 'COMPLETE';
+  }
+
+  if (!response.candidates || response.candidates.length === 0) {
+    console.error('Response has no candidates');
+    sendToSidepanel({
+      type: 'ERROR',
+      message: 'No response from model'
+    });
+    return 'COMPLETE';
+  }
+
+  const candidate = response.candidates[0];
+
+  // Add model response to history
+  agent.addModelResponse(candidate);
+
+  // Extract reasoning and function calls
+  const reasoning = agent.getText(candidate);
+  const functionCalls = agent.extractFunctionCalls(candidate);
+
+  // Handle malformed function call - retry
+  if (!functionCalls.length && !reasoning && agent.isMalformedFunctionCall(candidate)) {
+    console.log('Malformed function call detected, retrying...');
+    return 'CONTINUE';
+  }
+
+  // Send model message to UI
+  sendToSidepanel({
+    type: 'UPDATE_CONVERSATION',
+    message: {
+      role: 'model',
+      content: reasoning,
+      actions: functionCalls.map(fc => formatFunctionCall(fc))
+    }
+  });
+
+  // No function calls - agent is complete or waiting for input
+  if (!functionCalls.length) {
+    console.log('Agent Loop Complete:', reasoning);
+    agent.finalReasoning = reasoning;
+
+    sendToSidepanel({
+      type: 'STATUS_UPDATE',
+      status: agent.isWaitingForInput(reasoning) ? 'waiting' : 'idle'
+    });
+
+    return 'COMPLETE';
+  }
+
+  // Execute each function call
+  const functionResponses = [];
+
+  for (const fc of functionCalls) {
+    if (shouldStop) break;
+
+    // Check for safety confirmation requirement
+    const safety = agent.requiresSafetyConfirmation(fc);
+    let safetyAcknowledgement = false;
+
+    if (safety.required) {
+      const allowed = await requestSafetyConfirmation(fc, safety.explanation);
+
+      if (!allowed) {
+        console.log('Terminating agent loop - user denied action');
+        return 'COMPLETE';
+      }
+      safetyAcknowledgement = true;
+    }
+
+    // Execute the action
+    const result = await executeAction(fc.name, fc.args, currentSettings?.highlightMouse);
+
+    // Wait for page to settle and capture screenshot
+    await waitForPageSettle();
+    const screenshot = await captureScreenshot();
+
+    // Build function response (matching Python EnvState structure)
+    const response = {
+      url: result.url || await getCurrentUrl()
+    };
+
+    if (safetyAcknowledgement) {
+      response.safety_acknowledgement = 'true';
+    }
+
+    functionResponses.push({
+      name: fc.name,
+      response,
+      screenshot
+    });
+
+    await sleep(200);
+  }
+
+  if (shouldStop) {
+    return 'COMPLETE';
+  }
+
+  // Add function responses to conversation
+  agent.addFunctionResponses(functionResponses);
+
+  return 'CONTINUE';
+}
+
+/**
  * Main agent loop
+ * Mirrors the Python run method
  */
 async function runAgentLoop(initialPrompt) {
   if (isRunning) {
@@ -243,9 +299,10 @@ async function runAgentLoop(initialPrompt) {
   sendToSidepanel({ type: 'STATUS_UPDATE', status: 'running' });
 
   try {
-    // If this is a new conversation, add the initial message (no screenshot per original implementation)
+    // Start new conversation if we have an initial prompt
     if (initialPrompt) {
-      conversationHistory.push(buildUserMessage(initialPrompt, null));
+      agent = new BrowserAgent(currentSettings);
+      agent.startConversation(initialPrompt);
 
       sendToSidepanel({
         type: 'UPDATE_CONVERSATION',
@@ -256,110 +313,14 @@ async function runAgentLoop(initialPrompt) {
       });
     }
 
+    // Agent loop
     while (isRunning && !shouldStop) {
-      // Call Gemini API
-      let response;
-      try {
-        response = await callGeminiAPI(conversationHistory, currentSettings);
-      } catch (error) {
-        sendToSidepanel({
-          type: 'ERROR',
-          message: error.message
-        });
+      const result = await runOneIteration();
+
+      if (result === 'COMPLETE') {
         break;
       }
 
-      // Add model response to history
-      conversationHistory.push({
-        role: 'model',
-        parts: response.parts
-      });
-
-      // Extract text and function calls
-      const text = extractText(response.parts);
-      const functionCalls = extractFunctionCalls(response.parts);
-
-      // Handle malformed function call - retry without adding to history
-      if (!functionCalls.length && !text && response.finishReason === 'MALFORMED_FUNCTION_CALL') {
-        console.log('Malformed function call detected, retrying...');
-        // Remove the empty model response we just added
-        conversationHistory.pop();
-        continue;
-      }
-
-      // Send model message to UI
-      sendToSidepanel({
-        type: 'UPDATE_CONVERSATION',
-        message: {
-          role: 'model',
-          content: text,
-          actions: functionCalls.map(fc => formatFunctionCall(fc))
-        }
-      });
-
-      // Check if there are no function calls
-      if (functionCalls.length === 0) {
-        // Model is done or asking a question
-        isRunning = false;
-        sendToSidepanel({
-          type: 'STATUS_UPDATE',
-          status: isWaitingForInput(response.parts) ? 'waiting' : 'idle'
-        });
-        break;
-      }
-
-      // Execute each function call and capture screenshot after each
-      const functionResponses = [];
-
-      for (const fc of functionCalls) {
-        if (shouldStop) break;
-
-        // Check for safety confirmation requirement
-        const safety = requiresSafetyConfirmation(fc);
-        let safetyAcknowledgement = false;
-
-        if (safety.required) {
-          const allowed = await requestSafetyConfirmation(fc, safety.explanation);
-
-          if (!allowed) {
-            // For denied actions, get current URL and skip
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            functionResponses.push(
-              buildFunctionResponse(fc.name, { url: tab?.url || '', denied: true, reason: 'User denied action' }, null, false)
-            );
-            continue;
-          }
-          safetyAcknowledgement = true;
-        }
-
-        // Execute the action
-        const result = await executeAction(fc.name, fc.args, currentSettings?.highlightMouse);
-
-        // Wait for page to settle and capture screenshot
-        await waitForPageSettle();
-        const screenshot = await captureScreenshot();
-
-        // Build function response with screenshot embedded
-        functionResponses.push(
-          buildFunctionResponse(fc.name, result, screenshot, safetyAcknowledgement)
-        );
-
-        // Wait a bit between actions
-        await sleep(200);
-      }
-
-      if (shouldStop) break;
-
-      // Add function responses to history (screenshots are embedded in each response)
-      conversationHistory.push({
-        role: 'user',
-        parts: functionResponses
-      });
-
-      // Clean up old screenshots to manage context size
-      cleanupOldScreenshots();
-
-      // Small delay before next iteration
       await sleep(300);
     }
   } catch (error) {
@@ -387,9 +348,15 @@ async function handleUserMessage(text) {
     return;
   }
 
+  if (!agent) {
+    // Start a new conversation if no agent exists
+    runAgentLoop(text);
+    return;
+  }
+
   try {
-    // Add user message without screenshot (matching original implementation)
-    conversationHistory.push(buildUserMessage(text, null));
+    // Add user message to existing conversation
+    agent.addUserMessage(text);
 
     sendToSidepanel({
       type: 'UPDATE_CONVERSATION',
@@ -400,8 +367,26 @@ async function handleUserMessage(text) {
     });
 
     // Resume the agent loop
-    runAgentLoop(null);
+    isRunning = true;
+    shouldStop = false;
+    sendToSidepanel({ type: 'STATUS_UPDATE', status: 'running' });
+
+    while (isRunning && !shouldStop) {
+      const result = await runOneIteration();
+
+      if (result === 'COMPLETE') {
+        break;
+      }
+
+      await sleep(300);
+    }
+
+    isRunning = false;
+    if (!shouldStop) {
+      sendToSidepanel({ type: 'STATUS_UPDATE', status: 'idle' });
+    }
   } catch (error) {
+    isRunning = false;
     sendToSidepanel({
       type: 'ERROR',
       message: error.message
@@ -424,7 +409,10 @@ function stopAgent() {
  * Reset conversation
  */
 function resetConversation() {
-  conversationHistory = [];
+  if (agent) {
+    agent.reset();
+  }
+  agent = null;
   isRunning = false;
   shouldStop = false;
   pendingSafetyConfirmation = null;
@@ -467,7 +455,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'GET_STATUS':
       sendResponse({
         isRunning,
-        conversationLength: conversationHistory.length
+        conversationLength: agent?.contents?.length || 0
       });
       break;
 
