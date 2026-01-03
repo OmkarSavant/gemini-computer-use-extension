@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gemini Computer Use",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtl9OMTw6rE1tJ1rW+oZOeQ9klwIkatNrXehSJ1x24JT5X+kGcenqRp6HboUptX7akGFi31u2+3R1CmF6X1/J2zOrDXrd+GlOc3l2MVPwpoDGHLjS6Q5N+pwRMSqmurbc4S1F1hcO2vHN/7rMM/QfNsYjbvzQNceoVXWfEO9Ww4zXQFF1vwiczp3c7WaV3oD31EDSVS4EN783pBH2oDQgHVxaN6zvdBRNlw91B9K77DHlRImmmoPjHDf7TA2Y4C2CJoWNRcfYMguUyiqm692gQr1OOePFLE9ZLG4OOwoWMS5ficnDOwuRxoloRGuoCgKZTFc7gJhdU1OOKwjryVKD0wIDAQAB",
   "version": "1.0.0",
   "description": "Test Gemini Computer Use model directly in your browser",
   "permissions": [
