@@ -38,21 +38,7 @@ npm run watch
 4. Click "Load unpacked" and select the `dist` folder (not the root folder!)
 5. The extension icon will appear in your Chrome toolbar
 
-## Getting a Gemini API Key
-
-### Option 1: Gemini Developer API (Recommended for testing)
-
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-2. Sign in with your Google account
-3. Click "Create API Key"
-4. Copy the generated API key
-
-### Option 2: Vertex AI (For production use)
-
-1. Set up a Google Cloud project at [console.cloud.google.com](https://console.cloud.google.com)
-2. Enable the Vertex AI API
-3. Note your Project ID and preferred location (e.g., `us-central1`)
-4. Ensure you're signed into Chrome with an account that has access to the project
+## Note: Your Gemini API key must be a paid tier key - free tier keys will not work. 
 
 ## Usage
 
@@ -66,10 +52,7 @@ npm run watch
 ### Running Tasks
 
 1. Navigate to any webpage
-2. Type a task in the message input, for example:
-   - "Search for AI news on Google"
-   - "Find the login button and click it"
-   - "Scroll down and read the article titles"
+2. Type a task in the message input
 3. Click "Send" or press Enter
 4. Watch as the agent analyzes the page and executes actions
 
@@ -142,20 +125,10 @@ The agent can perform the following actions:
 
 ## Troubleshooting
 
-### "Invalid API key" error
-- Double-check that you've entered the API key correctly
-- Ensure the API key has not expired or been revoked
-- Try generating a new API key
-
 ### Actions not working on a page
 - Some pages block automated interactions
 - Try refreshing the page and starting again
 - Check if the page uses complex JavaScript frameworks that may interfere
-
-### Extension not responding
-- Try closing and reopening the side panel
-- Refresh the target page
-- Reload the extension from `chrome://extensions`
 
 ### Screenshot capture fails
 - Make sure you're on a regular webpage (not a Chrome internal page)
