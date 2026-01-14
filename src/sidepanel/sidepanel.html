@@ -1,20 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gemini Computer Use</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
+
 <body>
   <div class="container">
     <!-- Header -->
     <header class="header">
-      <h1>Gemini Computer Use</h1>
+      <h1>Gemini Computer Use <span class="version-badge">v1.2</span></h1>
       <button id="settings-btn" class="icon-btn" title="Settings">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+          </path>
         </svg>
       </button>
     </header>
@@ -32,8 +36,21 @@
       </div>
       <div class="settings-content">
         <div class="form-group">
-          <label for="model-name">Model Name:</label>
-          <input type="text" id="model-name" value="gemini-2.5-computer-use-preview-10-2025">
+          <label for="model-select">Model:</label>
+          <select id="model-select">
+            <option value="gemini-2.5-computer-use-preview-10-2025">Gemini 2.5 Computer Use</option>
+            <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
+            <option value="gemini-3-pro-preview">Gemini 3 Pro</option>
+          </select>
+        </div>
+
+        <div class="form-group" id="thinking-level-section">
+          <label for="thinking-level">Thinking Level:</label>
+          <select id="thinking-level">
+            <option value="low">Low (faster, less reasoning)</option>
+            <option value="high">High (slower, more reasoning)</option>
+          </select>
+          <p class="hint">Controls depth of model reasoning</p>
         </div>
 
         <div class="form-group checkbox-group">
@@ -126,10 +143,12 @@
         <span id="status-indicator" class="status-indicator idle"></span>
         <span id="status-text">Idle</span>
       </div>
+      <button id="export-btn" class="btn btn-text" disabled title="Export trajectory as HTML">Export</button>
       <button id="new-chat-btn" class="btn btn-text">New Conversation</button>
     </div>
   </div>
 
   <script src="sidepanel.js" type="module"></script>
 </body>
+
 </html>

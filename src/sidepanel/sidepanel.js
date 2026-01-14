@@ -10,7 +10,9 @@ const newChatBtn = document.getElementById('new-chat-btn');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsPanel = document.getElementById('settings-panel');
 const settingsClose = document.getElementById('settings-close');
-const modelNameInput = document.getElementById('model-name');
+const modelSelect = document.getElementById('model-select');
+const thinkingLevelSelect = document.getElementById('thinking-level');
+const thinkingLevelSection = document.getElementById('thinking-level-section');
 const useVertexCheckbox = document.getElementById('use-vertex');
 const apiKeySection = document.getElementById('api-key-section');
 const vertexSection = document.getElementById('vertex-section');
@@ -31,6 +33,21 @@ const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
+const exportBtn = document.getElementById('export-btn');
+
+// Thinking level options by model type (2.5 Computer Use has no configurable thinking)
+const THINKING_LEVELS = {
+  'gemini-3-pro': [
+    { value: 'low', label: 'Low (faster, less reasoning)' },
+    { value: 'high', label: 'High (slower, more reasoning)' }
+  ],
+  'gemini-3-flash': [
+    { value: 'minimal', label: 'Minimal (fastest, minimal reasoning)' },
+    { value: 'low', label: 'Low (fast, less reasoning)' },
+    { value: 'medium', label: 'Medium (balanced)' },
+    { value: 'high', label: 'High (slow, more reasoning)' }
+  ]
+};
 
 // State
 let currentStatus = 'idle';
@@ -43,7 +60,9 @@ async function loadSettings() {
   const result = await chrome.storage.local.get('settings');
   const settings = result.settings || {};
 
-  modelNameInput.value = settings.modelName || 'gemini-2.5-computer-use-preview-10-2025';
+  modelSelect.value = settings.modelName || 'gemini-2.5-computer-use-preview-10-2025';
+  updateThinkingLevelOptions();
+  thinkingLevelSelect.value = settings.thinkingLevel || 'low';
   useVertexCheckbox.checked = settings.useVertexAI || false;
   apiKeyInput.value = settings.apiKey || '';
   vertexProjectInput.value = settings.vertexProject || '';
@@ -54,11 +73,63 @@ async function loadSettings() {
 }
 
 /**
+ * Update thinking level dropdown options based on selected model
+ */
+function updateThinkingLevelOptions() {
+  const modelName = modelSelect.value;
+  let options;
+
+  // 2.5 Computer Use has no configurable thinking levels
+  if (modelName.includes('computer-use')) {
+    thinkingLevelSection.classList.add('hidden');
+    return;
+  }
+
+  // Show thinking level section for 3.0 models
+  thinkingLevelSection.classList.remove('hidden');
+
+  if (modelName.includes('gemini-3-flash')) {
+    options = THINKING_LEVELS['gemini-3-flash'];
+  } else if (modelName.includes('gemini-3-pro')) {
+    options = THINKING_LEVELS['gemini-3-pro'];
+  } else {
+    // Fallback - hide if unknown model
+    thinkingLevelSection.classList.add('hidden');
+    return;
+  }
+
+  // Save current selection if valid for new model
+  const currentValue = thinkingLevelSelect.value;
+
+  // Clear and repopulate options
+  thinkingLevelSelect.innerHTML = '';
+  for (const opt of options) {
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    thinkingLevelSelect.appendChild(option);
+  }
+
+  // Restore selection if valid, otherwise default to 'low'
+  const validValues = options.map(o => o.value);
+  if (validValues.includes(currentValue)) {
+    thinkingLevelSelect.value = currentValue;
+  } else {
+    thinkingLevelSelect.value = 'low';
+  }
+}
+
+/**
  * Save settings to storage
  */
 async function saveSettings() {
+  // Get previous settings to check if model changed
+  const previousSettings = await getSettings();
+  const previousModel = previousSettings.modelName;
+
   const settings = {
-    modelName: modelNameInput.value.trim(),
+    modelName: modelSelect.value,
+    thinkingLevel: thinkingLevelSelect.value,
     useVertexAI: useVertexCheckbox.checked,
     apiKey: apiKeyInput.value.trim(),
     vertexProject: vertexProjectInput.value.trim(),
@@ -71,8 +142,15 @@ async function saveSettings() {
   // Close settings panel
   settingsPanel.classList.add('hidden');
 
-  // Show confirmation
-  showStatus('Settings saved', 'idle');
+  // If model changed, auto-start a new conversation
+  if (previousModel && previousModel !== settings.modelName) {
+    clearConversation();
+    showStatus(`Model changed. New conversation started.`, 'idle');
+    if (exportBtn) exportBtn.disabled = true;
+  } else {
+    // Show confirmation
+    showStatus('Settings saved', 'idle');
+  }
 }
 
 /**
@@ -82,6 +160,7 @@ async function getSettings() {
   const result = await chrome.storage.local.get('settings');
   return result.settings || {
     modelName: 'gemini-2.5-computer-use-preview-10-2025',
+    thinkingLevel: 'low',
     useVertexAI: false,
     apiKey: '',
     vertexProject: '',
@@ -117,7 +196,7 @@ function toggleApiKeyVisibility() {
 /**
  * Add a message to the conversation
  */
-function addMessage(role, content, actions = []) {
+function addMessage(role, content, actions = [], thoughtSummary = null, isError = false) {
   // Remove welcome message if present
   const welcomeMessage = conversationDiv.querySelector('.welcome-message');
   if (welcomeMessage) {
@@ -125,11 +204,11 @@ function addMessage(role, content, actions = []) {
   }
 
   const messageDiv = document.createElement('div');
-  messageDiv.className = `message ${role}`;
+  messageDiv.className = `message ${role}${isError ? ' error' : ''}`;
 
   const senderDiv = document.createElement('div');
   senderDiv.className = 'message-sender';
-  senderDiv.textContent = role === 'user' ? 'You' : 'Model';
+  senderDiv.textContent = role === 'user' ? 'You' : (isError ? '⚠️ Error' : 'Model');
 
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content';
@@ -138,6 +217,24 @@ function addMessage(role, content, actions = []) {
     const textP = document.createElement('p');
     textP.textContent = content;
     contentDiv.appendChild(textP);
+  }
+
+  // Add thought summary if present (before actions)
+  if (thoughtSummary) {
+    const thoughtDetails = document.createElement('details');
+    thoughtDetails.className = 'thought-block';
+    thoughtDetails.open = false;  // Collapsed by default
+
+    const thoughtSummaryEl = document.createElement('summary');
+    thoughtSummaryEl.textContent = '💭 Thought Summary';
+    thoughtDetails.appendChild(thoughtSummaryEl);
+
+    const thoughtContent = document.createElement('div');
+    thoughtContent.className = 'thought-content';
+    thoughtContent.textContent = thoughtSummary;
+    thoughtDetails.appendChild(thoughtContent);
+
+    contentDiv.appendChild(thoughtDetails);
   }
 
   // Add action blocks if present
@@ -310,6 +407,8 @@ newChatBtn.addEventListener('click', () => {
   // Clear the conversation and reset state
   clearConversation();
   showStatus('Idle', 'idle');
+  // Disable export button
+  if (exportBtn) exportBtn.disabled = true;
 });
 
 settingsBtn.addEventListener('click', () => {
@@ -321,6 +420,9 @@ settingsClose.addEventListener('click', () => {
 });
 
 useVertexCheckbox.addEventListener('change', updateVertexVisibility);
+
+// Update thinking level options when model changes
+modelSelect.addEventListener('change', updateThinkingLevelOptions);
 
 toggleApiKeyBtn.addEventListener('click', toggleApiKeyVisibility);
 
@@ -343,6 +445,31 @@ messageInput.addEventListener('keydown', (e) => {
 
 messageInput.addEventListener('input', autoResizeTextarea);
 
+// Export trajectory
+if (exportBtn) {
+  exportBtn.addEventListener('click', async () => {
+    exportBtn.disabled = true;
+    exportBtn.textContent = 'Exporting...';
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'EXPORT_TRAJECTORY' });
+      if (response.success) {
+        showStatus(`Exported: ${response.filename}`, 'idle');
+      } else {
+        showStatus(`Export failed: ${response.error}`, 'error');
+      }
+    } catch (error) {
+      showStatus(`Export error: ${error.message}`, 'error');
+    }
+
+    exportBtn.textContent = 'Export';
+    // Re-enable if there's still trajectory data
+    chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (status) => {
+      if (status) exportBtn.disabled = !status.hasTrajectory;
+    });
+  });
+}
+
 // Listen for messages from background
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
@@ -350,7 +477,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       addMessage(
         message.message.role,
         message.message.content,
-        message.message.actions
+        message.message.actions,
+        message.message.thoughtSummary
       );
       break;
 
@@ -376,13 +504,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'ERROR':
-      addMessage('model', `Error: ${message.message}`);
+      addMessage('model', message.message, [], null, true);  // isError = true
       showStatus('Error', 'error');
       break;
 
     case 'WAITING_FOR_INPUT':
       showStatus('Waiting for input', 'waiting');
       messageInput.focus();
+      break;
+
+    case 'TRAJECTORY_UPDATED':
+      // Enable export button when trajectory data becomes available
+      if (exportBtn && message.hasTrajectory) {
+        exportBtn.disabled = false;
+      }
       break;
   }
 

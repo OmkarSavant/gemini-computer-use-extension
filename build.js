@@ -20,12 +20,12 @@ function copyStatic() {
     fs.copyFileSync(`icons/icon${size}.png`, `dist/icons/icon${size}.png`);
   }
 
-  // Copy sidepanel HTML and CSS
-  fs.copyFileSync('sidepanel/sidepanel.html', 'dist/sidepanel/sidepanel.html');
-  fs.copyFileSync('sidepanel/sidepanel.css', 'dist/sidepanel/sidepanel.css');
+  // Copy sidepanel HTML and CSS from src
+  fs.copyFileSync('src/sidepanel/sidepanel.html', 'dist/sidepanel/sidepanel.html');
+  fs.copyFileSync('src/sidepanel/sidepanel.css', 'dist/sidepanel/sidepanel.css');
 
-  // Copy content script (no bundling needed)
-  fs.copyFileSync('content/content.js', 'dist/content/content.js');
+  // Copy content script from src (no bundling needed)
+  fs.copyFileSync('src/content/content.js', 'dist/content/content.js');
 
   console.log('Static files copied.');
 }
