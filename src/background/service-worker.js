@@ -6,6 +6,7 @@
  */
 
 import { BrowserAgent, formatFunctionCall, sleep } from '../lib/gemini-client.js';
+import { generateTrajectoryHTML, generateFilename } from '../lib/trajectory-export.js';
 
 // State management
 let agent = null;
@@ -14,13 +15,73 @@ let shouldStop = false;
 let currentSettings = null;
 let pendingSafetyConfirmation = null;
 
+// Trajectory tracking for export (cached from storage)
+let trajectorySteps = [];
+let trajectoryStartTime = null;
+let storedInitialPrompt = null;
+let storedModelName = null;
+
+/**
+ * Save trajectory data to chrome.storage.local for persistence
+ */
+async function saveTrajectoryToStorage() {
+  await chrome.storage.local.set({
+    trajectoryData: {
+      steps: trajectorySteps,
+      startTime: trajectoryStartTime,
+      initialPrompt: storedInitialPrompt,
+      modelName: storedModelName,
+      savedAt: Date.now()  // Track when data was saved for expiry
+    }
+  });
+}
+
+// Trajectory data expires after 24 hours
+const TRAJECTORY_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Load trajectory data from chrome.storage.local
+ * Clears data if older than 24 hours
+ */
+async function loadTrajectoryFromStorage() {
+  const result = await chrome.storage.local.get('trajectoryData');
+  if (result.trajectoryData) {
+    // Check if data has expired (24 hours)
+    const savedAt = result.trajectoryData.savedAt || 0;
+    if (Date.now() - savedAt > TRAJECTORY_EXPIRY_MS) {
+      console.log('[Gemini CU] Clearing expired trajectory data');
+      await clearTrajectoryStorage();
+      return;
+    }
+
+    trajectorySteps = result.trajectoryData.steps || [];
+    trajectoryStartTime = result.trajectoryData.startTime || null;
+    storedInitialPrompt = result.trajectoryData.initialPrompt || null;
+    storedModelName = result.trajectoryData.modelName || null;
+  }
+}
+
+/**
+ * Clear trajectory data from storage
+ */
+async function clearTrajectoryStorage() {
+  trajectorySteps = [];
+  trajectoryStartTime = null;
+  storedInitialPrompt = null;
+  storedModelName = null;
+  await chrome.storage.local.remove('trajectoryData');
+}
+
+// Load trajectory on service worker startup (with expiry check)
+loadTrajectoryFromStorage();
+
 // Open side panel when extension icon is clicked
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ tabId: tab.id });
 });
 
 // Enable side panel for all tabs
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => { });
 
 /**
  * Capture screenshot of the active tab
@@ -197,6 +258,7 @@ async function runOneIteration() {
 
   // Extract reasoning and function calls
   const reasoning = agent.getText(candidate);
+  const thoughtSummary = agent.extractThoughtSummary(candidate);
   const functionCalls = agent.extractFunctionCalls(candidate);
 
   // Handle malformed function call - retry
@@ -211,6 +273,7 @@ async function runOneIteration() {
     message: {
       role: 'model',
       content: reasoning,
+      thoughtSummary: thoughtSummary,
       actions: functionCalls.map(fc => formatFunctionCall(fc))
     }
   });
@@ -219,6 +282,21 @@ async function runOneIteration() {
   if (!functionCalls.length) {
     console.log('Agent Loop Complete:', reasoning);
     agent.finalReasoning = reasoning;
+
+    // Track final response in trajectory (even without screenshot)
+    if (reasoning || thoughtSummary) {
+      trajectorySteps.push({
+        timestamp: new Date().toISOString(),
+        screenshot: null,
+        text: reasoning,
+        thoughts: thoughtSummary,
+        actions: [],
+        result: { final: true }
+      });
+      // Save to storage and notify sidepanel
+      await saveTrajectoryToStorage();
+      sendToSidepanel({ type: 'TRAJECTORY_UPDATED', hasTrajectory: true });
+    }
 
     sendToSidepanel({
       type: 'STATUS_UPDATE',
@@ -270,6 +348,20 @@ async function runOneIteration() {
       screenshot
     });
 
+    // Track step for trajectory export
+    trajectorySteps.push({
+      timestamp: new Date().toISOString(),
+      screenshot: screenshot,
+      text: reasoning,
+      thoughts: thoughtSummary,
+      actions: [formatFunctionCall(fc)],
+      result: response
+    });
+
+    // Save to storage and notify sidepanel
+    await saveTrajectoryToStorage();
+    sendToSidepanel({ type: 'TRAJECTORY_UPDATED', hasTrajectory: true });
+
     await sleep(200);
   }
 
@@ -303,6 +395,12 @@ async function runAgentLoop(initialPrompt) {
     if (initialPrompt) {
       agent = new BrowserAgent(currentSettings);
       agent.startConversation(initialPrompt);
+
+      // Initialize trajectory tracking
+      trajectoryStartTime = new Date().toISOString();
+      storedInitialPrompt = initialPrompt;
+      storedModelName = currentSettings?.modelName || 'unknown';
+      await saveTrajectoryToStorage();
 
       sendToSidepanel({
         type: 'UPDATE_CONVERSATION',
@@ -408,7 +506,7 @@ function stopAgent() {
 /**
  * Reset conversation
  */
-function resetConversation() {
+async function resetConversation() {
   if (agent) {
     agent.reset();
   }
@@ -416,6 +514,97 @@ function resetConversation() {
   isRunning = false;
   shouldStop = false;
   pendingSafetyConfirmation = null;
+  // Reset trajectory tracking and clear from storage
+  await clearTrajectoryStorage();
+}
+
+/**
+ * Generate a two-word title for the trajectory using Gemini Flash
+ * Falls back gracefully if the API call fails
+ */
+async function generateTrajectoryTitle(prompt) {
+  // If no API key available, return default
+  if (!currentSettings?.apiKey) {
+    return 'Agent Trajectory';
+  }
+
+  try {
+    // Use gemini-2.5-flash-lite for faster, cheaper title generation
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${currentSettings.apiKey}`;
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [{ text: `Generate a two-word title (like "Email Search" or "Flight Booking") that summarizes this task. Reply with ONLY the two words, nothing else.\n\nTask: ${prompt}` }]
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 10
+        }
+      })
+    });
+
+    if (!response.ok) {
+      console.warn('Title generation API error, using fallback');
+      return 'Agent Trajectory';
+    }
+
+    const data = await response.json();
+    const title = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Agent Trajectory';
+    return title.split(/\s+/).slice(0, 3).join(' ');
+  } catch (error) {
+    console.error('Title generation failed:', error);
+    return 'Agent Trajectory';
+  }
+}
+
+/**
+ * Export trajectory as HTML and trigger download
+ */
+async function exportTrajectory() {
+  if (trajectorySteps.length === 0) {
+    return { success: false, error: 'No trajectory data to export' };
+  }
+
+  try {
+    const taskTitle = await generateTrajectoryTitle(storedInitialPrompt);
+
+    const trajectoryData = {
+      taskTitle,
+      initialPrompt: storedInitialPrompt,
+      startTime: trajectoryStartTime,
+      modelName: storedModelName,
+      steps: trajectorySteps
+    };
+
+    const html = generateTrajectoryHTML(trajectoryData);
+    const filename = generateFilename(trajectoryStartTime, taskTitle);
+
+    // Create data URL for download
+    const blob = new Blob([html], { type: 'text/html' });
+    const reader = new FileReader();
+
+    return new Promise((resolve) => {
+      reader.onloadend = async () => {
+        try {
+          await chrome.downloads.download({
+            url: reader.result,
+            filename: filename,
+            saveAs: true
+          });
+          resolve({ success: true, filename });
+        } catch (error) {
+          resolve({ success: false, error: error.message });
+        }
+      };
+      reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 }
 
 // Message handler
@@ -455,9 +644,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'GET_STATUS':
       sendResponse({
         isRunning,
-        conversationLength: agent?.contents?.length || 0
+        conversationLength: agent?.contents?.length || 0,
+        hasTrajectory: trajectorySteps.length > 0
       });
       break;
+
+    case 'EXPORT_TRAJECTORY':
+      exportTrajectory().then(result => {
+        sendResponse(result);
+      });
+      return true; // Keep channel open for async response
 
     default:
       sendResponse({ error: 'Unknown message type' });
